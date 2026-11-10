@@ -118,8 +118,9 @@ comparable.
 by itself. The public LB has ~9× more posts and is the stronger check, but submissions are limited and it can be
 overfit too. Rule: keep a change if it doesn't hurt es and helps CV; confirm big decisions on the LB.
 
-**CV vs LB:** the baseline scored CV 0.488 and LB 0.459, inside the CV interval. The correlation over all submitted runs
-is tracked in notebook 02, section 5.
+**CV vs LB:** the baseline scored CV 0.488 and LB 0.459, and the best tokenization run CV 0.597 and LB 0.537. Both LB
+scores are inside their CV intervals, CV is ~0.04–0.06 optimistic, and the two agree on the ranking. The correlation over
+all submitted runs is tracked in notebook 02, section 5.
 
 ## Models
 
@@ -177,11 +178,12 @@ stopping on es F1, seed 42. Only the tokenizer, the label alignment and the dire
 | `ivan-gru1-bpe16k-random-last` | BPE 16k | last | uni | 0.571 | 0.49 | 0.69 | 0.62 | 0.823 | 2.3M | – |
 | `ivan-bigru1-word-random` | word 50k | – | bi | 0.494 | 0.41 | 0.63 | 0.59 | 0.846 | 7.0M | – |
 | `ivan-bigru1-bpe16k-random-first` | BPE 16k | first | bi | 0.560 | 0.49 | 0.66 | 0.63 | 0.847 | 2.6M | – |
-| **`ivan-bigru1-bpe16k-random-last`** | BPE 16k | last | bi | **0.597** | 0.51 | 0.72 | 0.65 | 0.850 | 2.6M | – |
+| **`ivan-bigru1-bpe16k-random-last`** | BPE 16k | last | bi | **0.597** | 0.51 | 0.72 | 0.65 | 0.850 | 2.6M | **0.537** |
 | `ivan-bigru1-bpe8k-random-first` | BPE 8k | first | bi | 0.545 | 0.47 | 0.66 | 0.64 | 0.849 | 1.6M | – |
 | `ivan-bigru1-bpe32k-random-first` | BPE 32k | first | bi | 0.521 | 0.46 | 0.59 | 0.63 | 0.855 | 4.7M | – |
 
-None of these runs has been submitted yet.
+Only the best run was submitted (one submission instead of eight). **The LB confirms the gain:** 0.537 against the
+baseline's 0.459 (+0.078), while CV rose by +0.109. Both runs score about 0.04–0.06 lower on the LB than on CV.
 
 **Insights:**
 - **BPE beats word-level in every pairing.** All six BPE runs (CV 0.52–0.60) score above both word-level runs (0.49),
