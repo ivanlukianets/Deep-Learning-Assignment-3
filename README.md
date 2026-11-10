@@ -149,5 +149,56 @@ Notebook: [`notebooks/02_validation_baseline.ipynb`](notebooks/02_validation_bas
 - **Misses:** towns listed without context, unseen names (`Хелма`) and Russian forms (`Фастовском`), which motivates
   subword tokenization and fastText embeddings.
 
+### Tokenization: word-level vs BPE
+Notebook: [`notebooks/05_tokenization.ipynb`](notebooks/05_tokenization.ipynb).
+
+**BPE setup.** Hugging Face `tokenizers` BPE trained on the training words (lowercased), so a piece never crosses a word
+boundary. Pieces that continue a word get a `##` prefix (`васильковом` → `василь ##ков ##ом`). A word's BIO label goes on
+**one** piece, its first or its last; the other pieces get −100 and are ignored by the loss. Predictions are read from
+the same piece, so every model outputs word-level probabilities and can be ensembled with any other.
+
+| Vocabulary | ids per word (test) | `<unk>` (test) | ids per gold location word | `<unk>` in gold location words |
+|---|---|---|---|---|
+| word 50k | 1.00 | 14.6% | 1.00 | 27.7% |
+| BPE 8k | 1.63 | 1.8% | 2.26 | 0% |
+| BPE 16k | 1.44 | 2.1% | 1.96 | 0% |
+| BPE 32k | 1.30 | 2.3% | 1.64 | 0% |
+
+BPE removes `<unk>` from every gold location word; what stays `<unk>` is emoji and symbols. Location words are split
+more than ordinary words because they are rare.
+
+**Experiments.** 1-layer GRU, hidden 256, random 128-d embeddings, dropout 0.3, AdamW lr 2e-3, up to 6 epochs with early
+stopping on es F1, seed 42. Only the tokenizer, the label alignment and the direction change.
+
+| Run | Tokenizer | Label on | Direction | CV F1 | Precision | Recall | Partial F1 | es F1 | Params | Public LB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `ivan-gru1-word-random` | word 50k | – | uni | 0.486 | 0.43 | 0.56 | 0.57 | 0.806 | 6.7M | – |
+| `ivan-gru1-bpe16k-random-first` | BPE 16k | first | uni | 0.550 | 0.46 | 0.69 | 0.62 | 0.767 | 2.3M | – |
+| `ivan-gru1-bpe16k-random-last` | BPE 16k | last | uni | 0.571 | 0.49 | 0.69 | 0.62 | 0.823 | 2.3M | – |
+| `ivan-bigru1-word-random` | word 50k | – | bi | 0.494 | 0.41 | 0.63 | 0.59 | 0.846 | 7.0M | – |
+| `ivan-bigru1-bpe16k-random-first` | BPE 16k | first | bi | 0.560 | 0.49 | 0.66 | 0.63 | 0.847 | 2.6M | – |
+| **`ivan-bigru1-bpe16k-random-last`** | BPE 16k | last | bi | **0.597** | 0.51 | 0.72 | 0.65 | 0.850 | 2.6M | – |
+| `ivan-bigru1-bpe8k-random-first` | BPE 8k | first | bi | 0.545 | 0.47 | 0.66 | 0.64 | 0.849 | 1.6M | – |
+| `ivan-bigru1-bpe32k-random-first` | BPE 32k | first | bi | 0.521 | 0.46 | 0.59 | 0.63 | 0.855 | 4.7M | – |
+
+None of these runs has been submitted yet.
+
+**Insights:**
+- **BPE beats word-level in every pairing.** All six BPE runs (CV 0.52–0.60) score above both word-level runs (0.49),
+  with 2.6× fewer parameters. One run alone would be inside the CV noise; six out of six is a pattern.
+- **Label on the last piece beats the first piece.** For the one-direction GRU, es F1 jumps from 0.767 to 0.823: with
+  the first piece, the model must tag `Васильковом` after reading only `василь`. This explains why our first BPE attempt
+  on a vanilla RNN failed (CV 0.411). For the BiGRU, es is the same either way, because the backward pass already shows
+  the whole word.
+- **Bidirectional helps on es (0.806 → 0.846) more than on CV (0.486 → 0.494).** On test-like posts the tokenizer
+  matters more than the direction.
+- **BPE 16k is the best size on CV** (8k 0.545, 16k 0.560, 32k 0.521), though the differences are within the noise.
+- **es and CV disagree again:** es rises until epoch 6, while CV peaks around epochs 2–3. The same domain gap as the
+  baseline.
+- **What BPE changes:** it finds `Бориспіль`, `ТЦ Аркадія` and `вул. Солом'янська, 28`, loses the Russian forms
+  `Фастовском` and `Бучанском`, and makes fewer false positives (precision 0.41 → 0.51).
+- **Failed idea:** BPE with first-piece labels on a one-direction model (the first version scored CV 0.411, below
+  word-level). The fix was the last-piece label or a bidirectional model.
+
 ## Ensembling
 
