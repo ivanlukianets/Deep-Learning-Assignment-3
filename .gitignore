@@ -19,3 +19,7 @@ __pycache__/
 # Claude info
 CLAUDE.md
 PLAN.md
+
+# Just lecture notebooks for the context
+LSTM_GRU.ipynb
+RNN.ipynb
