@@ -1,0 +1,21 @@
+# Secrets: never commit
+secrets.env
+*.env
+kaggle.json
+
+# Data and run outputs (downloaded or regenerated)
+data/
+artifacts/
+submissions/
+wandb/
+lightning_logs/
+
+# Python / Jupyter
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+.DS_Store
+
+# Claude info
+CLAUDE.md
+PLAN.md
