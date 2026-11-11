@@ -1,5 +1,8 @@
 # Deep-Learning-Assignment-3
 
+GitHub: github.com/ivanlukianets/Deep-Learning-Assignment-3
+Kaggle Team: "ЛенінськоКомуністичні елементи"
+
 ## EDA and Metric Analysis
 
 Notebook: [`notebooks/01_eda_metric.ipynb`](notebooks/01_eda_metric.ipynb).
