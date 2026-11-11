@@ -119,7 +119,9 @@ by itself. The public LB has ~9× more posts and is the stronger check, but subm
 overfit too. Rule: keep a change if it doesn't hurt es and helps CV; confirm big decisions on the LB.
 
 **CV vs LB:** the baseline scored CV 0.488 and LB 0.459, and the best tokenization run CV 0.597 and LB 0.537. Both LB
-scores are inside their CV intervals, CV is ~0.04–0.06 optimistic, and the two agree on the ranking. The correlation over
+scores are inside their CV intervals, CV is ~0.04–0.06 optimistic, and the two agree on the ranking. The fastText +
+BiGRU + CRF runs (notebook 08) still rank first on both, but the gap grew to 0.13–0.17 (CV 0.765 / LB 0.598, CV 0.734 /
+LB 0.60): CV and test share channels and templates (4 near-duplicate CV↔test pairs), so the 26 CV texts are optimistic. The correlation over
 all submitted runs is tracked in notebook 02, section 5.
 
 ## Models
@@ -201,6 +203,72 @@ baseline's 0.459 (+0.078), while CV rose by +0.109. Both runs score about 0.04�
   `Фастовском` and `Бучанском`, and makes fewer false positives (precision 0.41 → 0.51).
 - **Failed idea:** BPE with first-piece labels on a one-direction model (the first version scored CV 0.411, below
   word-level). The fix was the last-piece label or a bidirectional model.
+
+### Preprocessing and relabelling of the training data
+Notebook: [`notebooks/06_preprocessing.ipynb`](notebooks/06_preprocessing.ipynb).
+
+The silver train labels are automatic, and fixing them is allowed (train only; CV and test are never touched). Every
+fix is a rule in code, so the file can be rebuilt. The output is one file, `train_v2.parquet`: the whole uk dataset
+cleaned and deduplicated, plus a cleaned ru sample of 250k rows (20% of train). `es` keeps the same 10k uk rows,
+cleaned the same way.
+
+| Step | What it fixes | Effect |
+|---|---|---|
+| apostrophes, decomposed letters | `'` `’` `ʼ` `‘` `` ` `` become `'`; `и` + U+0306 becomes `й` (offsets moved) | 777 uk texts with combining marks |
+| news-site tails | ` - <rubric> - TCH.` and 10 other site breadcrumbs, whose rubric words were tagged LOC (`Укрaїнa`, `Світ`, `Київ`) | 14,362 tails cut, 5,891 LOC spans dropped |
+| hyphenated names | `[Івано][-Франківська]` and `[Ріо]-де-Жанейро` grown to the whole word | 5,565 uk texts relabelled |
+| punctuation at span edges | `вулиці.`, `«Київ`, `США (` trimmed to the first and last letter or digit | 2,152 uk + 462 ru texts |
+| shifted spans | `[Київщини, зокре]ма`: the whole text is dropped (train rows only) | 1,288 uk + 623 ru texts |
+| LOC on names of people | a string tagged PER ≥4× as often as LOC (and ≥20 times) loses its LOC spans (uk only) | 300 strings, 1,205 spans (`Трампа`, `Зеленського`) |
+| duplicates and conflicts | exact copies dropped; texts with conflicting labels dropped; train rows also in `es` dropped | uk −2,602 copies, ru −14,079 |
+| ru boilerplate | `Об этом сообщает ...` agency credits capped | 20,899 boilerplate rows |
+
+Result: 996k uk + 250k ru train sentences.
+
+### Pretrained fastText + BiGRU + CRF + case feature
+Notebook: [`notebooks/08_fasttext_bigru_crf.ipynb`](notebooks/08_fasttext_bigru_crf.ipynb).
+
+One run with every change that should help, instead of an ablation grid:
+- **Data:** `train_v2.parquet` (notebook 06), capped at uk 500k + ru 100k sentences for a faster run.
+- **Embeddings:** pretrained fastText `cc.uk.300` (300-d, case kept), fine-tuned at 0.1× the learning rate. Its subword
+  n-grams give a vector to every word, also unseen towns (`Фастів`, `Баришівка`), so the model can stay word-level.
+  The vocabulary is the 200k most frequent train words plus every word of es, CV and test (209k); the extra words only
+  get their fastText vector, no label is read.
+- **Lookup normalization** (ids only, the output strings are cut from the original text): apostrophe and dash variants
+  are unified, and every emoji, bullet and invisible character becomes one `<emoji>` id.
+- **Case feature:** 5 classes (`none`, `UPPER`, `Title`, `mixed`, `lower`), embedded (16-d) and concatenated to the word
+  vector, since Telegram posts are sometimes all caps.
+- **Model:** 2-layer BiGRU (hidden 256) → emission scores → a **self-written CRF** (forward algorithm for the loss,
+  Viterbi for decoding, both checked against brute force). 64.7M parameters, 62.6M of them the embedding.
+- **Training:** as in notebook 05 (AdamW lr 2e-3, weight decay 0.01, batch 256, clipping 1.0, dropout 0.3, up to 6
+  epochs, early stopping on es F1 with patience 2, seed 42); the CRF gets 10× the learning rate. A100, 12–16 minutes.
+
+| Run | CV F1 | Precision | Recall | Partial F1 | es F1 | Best epoch | Public LB |
+|---|---|---|---|---|---|---|---|
+| `taras-bigru2-word-fasttext-crf-case-data2-uk500k-ru100k` | **0.765** | 0.63 | 0.97 | – | 0.915 | 1 of 4 | 0.598 |
+| `taras-bigru2-word-fasttext-crf-case-clean-uk500k-ru100k` | 0.734 | 0.62 | 0.91 | 0.76 | 0.913 | 0 of 3 | **0.60** |
+
+The second run is the same model after the notebook update (lookup normalization, vocabulary rebuilt with the es, CV
+and test words). es is cleaned like train, so its F1 is not comparable with notebooks 02–05.
+
+**Insights:**
+- **Best LB so far:** 0.60 against 0.537 for the best BPE run (+0.06), and the CV gain is larger (+0.14 to +0.17).
+- **The two runs are equal on the LB** (0.598 vs 0.60). The CV drop (0.765 → 0.734) is one location on 26 texts, well
+  inside the noise.
+- **The CV↔LB gap grew** from 0.04–0.06 (notebooks 02–05) to 0.13–0.17. CV gains are optimistic, so big decisions are
+  confirmed on the LB.
+- **es and CV disagree again.** es F1 stays at 0.91 every epoch, while CV jumps between 0.66 and 0.74 (and 0.69–0.77 in
+  the first run). The best epoch is the first or second, so the model adapts to the news domain quickly.
+- **Recall is almost saturated (0.91–0.97); precision is the weak side (0.62).** Of 21 CV errors, 18 are false
+  positives:
+  - countries: `Україні` in `мир в Україні`, `України` in `міністра оборони України`;
+  - bare `Київ` / `Києва` in channel signatures (`Київ — пряма трансляція`) and organisation names (`поліція Києва`);
+  - the unlabeled station schedule (`Боярка`, `Тарасівка`, `Київ-Пасажирський`, ...): 8 FPs from one post;
+  - `Місяць` (the Moon, capitalised at the start of a sentence).
+- **The CRF fixes the tag sequence:** the learned transition `O → I-LOC` is −3.27, and only 1 boundary error is left
+  (`Бучанском районах` for `Бучанском`).
+- **Next:** the FPs follow the gold convention (a place inside an organisation name or a signature is not labeled), so
+  the model-based fixes are an `ORG` tag from `org_markers` and the remaining train label cleanup.
 
 ## Ensembling
 
