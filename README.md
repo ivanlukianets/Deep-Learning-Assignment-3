@@ -155,6 +155,74 @@ Notebook: [`notebooks/02_validation_baseline.ipynb`](notebooks/02_validation_bas
 - **Misses:** towns listed without context, unseen names (`Хелма`) and Russian forms (`Фастовском`), which motivates
   subword tokenization and fastText embeddings.
 
+### Architecture: depth and direction
+Notebook: [`notebooks/03_architecture.ipynb`](notebooks/03_architecture.ipynb).
+
+Same setup as the BPE experiments (BPE 16k, label on the last piece, random 128-d embeddings, hidden 256, dropout 0.3,
+AdamW lr 2e-3, up to 6 epochs, seed 42). Only the cell type, depth and direction change. The planned grid was
+GRU/LSTM × 1/2/3 layers × uni/bi (12 runs); the session crashed after 5 GRU runs, so **LSTM and the 3-layer BiGRU
+were not run**. None of these runs was submitted to the LB.
+
+| Run | Layers | Direction | CV F1 | Precision | Recall | Partial F1 | es F1 | Params | Minutes |
+|---|---|---|---|---|---|---|---|---|---|
+| `mykola-unigru1-bpe16k-last` | 1 | uni | 0.541 | 0.48 | 0.63 | 0.64 | 0.821 | 2.3M | 14 |
+| `mykola-bigru1-bpe16k-last` | 1 | bi | 0.512 | 0.42 | 0.66 | 0.62 | 0.855 | 2.6M | 22 |
+| `mykola-unigru2-bpe16k-last` | 2 | uni | 0.526 | 0.45 | 0.63 | 0.62 | 0.818 | 2.7M | 17 |
+| `mykola-bigru2-bpe16k-last` | 2 | bi | 0.550 | 0.46 | 0.69 | 0.60 | 0.852 | 3.8M | 29 |
+| `mykola-unigru3-bpe16k-last` | 3 | uni | 0.518 | 0.42 | 0.69 | 0.60 | 0.813 | 3.1M | 20 |
+
+**Insights:**
+- **Direction shows up on es, not on CV.** Bidirectional runs score 0.852–0.855 on es against 0.813–0.821 for
+  unidirectional ones, at every depth we ran. On CV the order flips and changes between pairs (0.541 vs 0.512 at
+  1 layer, 0.526 vs 0.550 at 2 layers). This matches notebook 05.
+- **Depth does not help.** es F1 is flat or slightly lower with more layers (uni: 0.821 → 0.818 → 0.813), CV has no
+  trend, and each extra layer costs parameters and 3–7 minutes.
+- **CV differences between architectures are noise.** The same config as notebook 05's best run (1-layer BiGRU,
+  BPE 16k, last piece, seed 42) scored CV 0.597 there, 0.512 here and 0.538 in notebook 04, while es stayed at
+  0.850–0.855. The spread between identical runs (0.085) is larger than the whole spread between architectures
+  (0.038). The CV curve of one run swings by up to 0.1 between epochs (`bigru1`: 0.63 at epoch 4, 0.51 at epoch 6),
+  and the checkpoint is picked by es, so the epoch that is reported is arbitrary on CV. GPU non-determinism with a
+  fixed seed is the likely source. The architecture ranking on CV should not be trusted, and this also weakens
+  small CV differences in the earlier tables.
+- **Gradient flow is healthy in a 3-layer GRU.** The gradient norm of the recurrent weights is the *largest* in the
+  layer closest to the embeddings (~1e-2) and the smallest in the top layer (~2e-3). There is no vanishing towards
+  the input and no exploding, and all norms stay far below the clipping threshold of 1.0, so clipping is inactive.
+  The GRU vs LSTM comparison was not run.
+- **Choice:** we keep the 1-layer BiGRU as the cheap default for the experiments. Notebook 04 used it as its
+  fallback architecture, because `results_03_architecture.csv` did not exist yet. The 2-layer BiGRU has the best CV
+  (0.550) but is within the noise and takes 1.4× the time. The final model (notebook 08) uses 2 layers, but this grid
+  gives no evidence that depth contributed to its gain: that comes from fastText embeddings, the CRF and the case
+  feature.
+
+### Optimizers, schedulers, hyperparameters
+Notebook: [`notebooks/04_optimization.ipynb`](notebooks/04_optimization.ipynb).
+
+Fixed 1-layer BiGRU, BPE 16k, last piece, 6 epochs, patience 2, gradient clipping 1.0. The notebook defines five
+optimizers, six schedulers (none, StepLR, cosine, OneCycle, ReduceLROnPlateau, linear warmup + decay) and one-factor
+sweeps of learning rate, weight decay, batch size, dropout and hidden size. **Only the optimizer comparison was run,
+and only AdamW trained.** The scheduler and hyperparameter sweeps have no results yet.
+
+| Optimizer | lr | CV F1 | es F1 | Best epoch | Minutes |
+|---|---|---|---|---|---|
+| **AdamW** | 2e-3 | **0.538** | **0.851** | 3 | 18 |
+| Adam | 2e-3 | 0.000 | 0.000 | – | 11 |
+| RMSprop | 2e-3 | 0.000 | 0.000 | – | 11 |
+| SGD + Nesterov momentum | 2e-3 | 0.000 | 0.000 | – | 11 |
+| SGD + Nesterov momentum | 0.1 | 0.000 | 0.000 | – | 11 |
+
+**Insights:**
+- **The four zeros are a failed comparison, not a ranking.** F1 is exactly 0 on both es and CV, the metric never
+  improved, and early stopping ended the run after 3 epochs (11 minutes against 18). This is the signature of a
+  model that predicts only `O`, the majority tag. We did not debug it.
+- **Likely cause: weight decay.** All runs use `weight_decay=0.01`. AdamW applies it decoupled from the gradient,
+  while Adam, RMSprop and SGD in PyTorch add it to the gradient as an L2 term. Adam and AdamW differ in nothing
+  else, and Adam fails at the same lr. For the adaptive optimizers, which normalize the update, the L2 term can
+  dominate the small loss gradient of the rare location tags and pull the output towards `O`. Plain SGD at lr 2e-3 is
+  probably just too slow for 3 epochs, and lr 0.1 was not stable enough with clipping at 1.0. A fair rerun needs
+  `weight_decay=0` for the non-AdamW optimizers.
+- **We keep AdamW** (lr 2e-3, weight decay 0.01, clipping 1.0) for all later experiments. It trains without
+  gradient spikes, and the one working run reproduces the es curve of the other notebooks (0.851). Maybe later tune the params more effectivly.
+
 ### Tokenization: word-level vs BPE
 Notebook: [`notebooks/05_tokenization.ipynb`](notebooks/05_tokenization.ipynb).
 
